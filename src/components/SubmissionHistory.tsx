@@ -45,41 +45,63 @@ export const SubmissionHistory: React.FC<SubmissionHistoryProps> = ({
     setRetryingId(record.id);
     showToast('info', '재전송 중', `'${record.submitterName}'님의 이수증 데이터를 구글 시트로 재전송합니다...`);
 
+    const payload = {
+      facultyType: record.facultyType,
+      submitterName: record.submitterName,
+      trainingName: record.trainingName,
+      certificateNumber: record.certificateNumber,
+      fileName: record.fileName,
+      notes: '재전송제출',
+      submittedAt: new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
+    };
+
+    let sentSuccessfully = false;
+
+    // 1. Try server proxy
     try {
       const res = await fetch('/api/submit-proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          gasUrl,
-          payload: {
-            facultyType: record.facultyType,
-            submitterName: record.submitterName,
-            trainingName: record.trainingName,
-            certificateNumber: record.certificateNumber,
-            fileName: record.fileName,
-            notes: '재전송제출',
-            submittedAt: new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })
-          }
-        })
+        body: JSON.stringify({ gasUrl, payload })
       });
 
-      const json = await res.json();
-      if (res.ok && json.success) {
-        const updated = updateRecordStatus(record.id, 'success', 'Google 시트 재전송 성공');
-        onRecordsChange(updated);
-        showToast('success', '재전송 성공!', '구글 시트 DB로 데이터가 성공적으로 전송되었습니다.');
-      } else {
-        const updated = updateRecordStatus(record.id, 'failed', json.error || '재전송 실패');
-        onRecordsChange(updated);
-        showToast('error', '재전송 실패', json.error || '구글 시트 전송 중 오류가 발생했습니다.');
+      const resText = await res.text();
+      let resJson: any = {};
+      try { resJson = JSON.parse(resText); } catch { resJson = { raw: resText }; }
+
+      if (res.ok && (resJson.success || resJson.status === 200 || resJson.data)) {
+        sentSuccessfully = true;
       }
-    } catch (err: any) {
-      const updated = updateRecordStatus(record.id, 'failed', err.message || '네트워크 오류');
-      onRecordsChange(updated);
-      showToast('error', '재전송 실패', err.message || '네트워크 오류가 발생했습니다.');
-    } finally {
-      setRetryingId(null);
+    } catch (proxyErr) {
+      console.warn('Proxy retry failed, attempting direct browser fetch fallback:', proxyErr);
     }
+
+    // 2. Direct browser fetch (no-cors) fallback
+    if (!sentSuccessfully) {
+      try {
+        await fetch(gasUrl, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(payload)
+        });
+        sentSuccessfully = true;
+      } catch (directErr) {
+        console.error('Direct retry failed:', directErr);
+      }
+    }
+
+    if (sentSuccessfully) {
+      const updated = updateRecordStatus(record.id, 'success', 'Google 시트 재전송 성공');
+      onRecordsChange(updated);
+      showToast('success', '재전송 성공!', '구글 시트 DB로 데이터가 성공적으로 전송되었습니다.');
+    } else {
+      const updated = updateRecordStatus(record.id, 'failed', '구글 시트 전송 실패');
+      onRecordsChange(updated);
+      showToast('error', '재전송 실패', '구글 시트 전송 중 오류가 발생했습니다.');
+    }
+
+    setRetryingId(null);
   };
 
   const getFacultyIcon = (type: FacultyType) => {

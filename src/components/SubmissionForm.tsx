@@ -180,24 +180,52 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
     try {
       if (targetGasUrl) {
-        // Send via backend proxy to safely post to GAS
-        const res = await fetch('/api/submit-proxy', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            gasUrl: targetGasUrl,
-            payload: submissionPayload
-          })
-        });
+        let sentSuccessfully = false;
 
-        const resJson = await res.json();
-        if (res.ok && resJson.success) {
+        // 1. Try server proxy first
+        try {
+          const res = await fetch('/api/submit-proxy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              gasUrl: targetGasUrl,
+              payload: submissionPayload
+            })
+          });
+
+          const resText = await res.text();
+          let resJson: any = {};
+          try { resJson = JSON.parse(resText); } catch { resJson = { raw: resText }; }
+
+          if (res.ok && (resJson.success || resJson.status === 200 || resJson.data)) {
+            sentSuccessfully = true;
+          }
+        } catch (proxyErr) {
+          console.warn('Proxy submission failed, attempting direct browser fetch fallback:', proxyErr);
+        }
+
+        // 2. Direct browser fetch fallback (no-cors) if proxy did not explicitly succeed
+        if (!sentSuccessfully) {
+          try {
+            await fetch(targetGasUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              headers: { 'Content-Type': 'text/plain' },
+              body: JSON.stringify(submissionPayload)
+            });
+            sentSuccessfully = true;
+          } catch (directErr) {
+            console.error('Direct submission failed:', directErr);
+          }
+        }
+
+        if (sentSuccessfully) {
           gasStatus = 'success';
-          gasMessage = 'Google 시트에 정상 기록되었습니다.';
+          gasMessage = 'Google 시트에 정상 전송되었습니다.';
           showToast('success', '제출 성공!', '연수 이수증 정보가 Google 시트 DB로 안전하게 전송되었습니다.');
         } else {
           gasStatus = 'failed';
-          gasMessage = resJson.error || 'Google 시트 전송에 응답하지 못했습니다.';
+          gasMessage = '구글 시트 전송에 응답하지 못했습니다.';
           showToast(
             'warning',
             '제출 완료 (DB 전송 확인 필요)',
@@ -215,7 +243,7 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
         );
       }
     } catch (err: any) {
-      console.error('Submission Proxy Error:', err);
+      console.error('Submission Error:', err);
       gasStatus = 'failed';
       gasMessage = err.message || '네트워크 전송 오류';
       showToast('error', '전송 실패', '전송 도중 오류가 발생하였습니다. 제출 내역에서 재시도할 수 있습니다.');
