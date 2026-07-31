@@ -64,6 +64,7 @@ async function startServer() {
             },
             {
               text: `다음 첨부된 대한민국 교직원 연수 이수증/수료증 문서(파일명: ${fileName || '문서'})를 분석하여 필요한 필수 정보를 정확히 추출해 주세요.
+설명이나 대화체 문장 없이 오직 요청된 JSON 데이터만 출력하세요.
 
 목표 extraction 항목:
 1. trainingName: 정확한 연수명 (과정명, 교육과정명). 부제나 회차가 포함된 경우 전체 명칭.
@@ -98,12 +99,52 @@ async function startServer() {
         },
       });
 
-      const responseText = response.text;
+      const responseText = response.text || "";
       if (!responseText) {
         return res.status(500).json({ error: "Gemini 응답 데이터가 비어 있습니다." });
       }
 
-      const extractedJson = JSON.parse(responseText);
+      // Clean markdown code fence formatting if present (e.g. ```json ... ```)
+      let cleanedText = responseText.trim();
+      if (cleanedText.startsWith("```json")) {
+        cleanedText = cleanedText.replace(/^```json\s*/i, "").replace(/\s*```$/, "");
+      } else if (cleanedText.startsWith("```")) {
+        cleanedText = cleanedText.replace(/^```\s*/, "").replace(/\s*```$/, "");
+      }
+
+      let extractedJson: any = null;
+
+      // 1. Direct JSON parse attempt
+      try {
+        extractedJson = JSON.parse(cleanedText);
+      } catch (e1) {
+        // 2. Extract JSON object substring between first '{' and last '}'
+        const firstBrace = cleanedText.indexOf("{");
+        const lastBrace = cleanedText.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace > firstBrace) {
+          const jsonSubstring = cleanedText.substring(firstBrace, lastBrace + 1);
+          try {
+            extractedJson = JSON.parse(jsonSubstring);
+          } catch (e2) {
+            console.error("Gemini JSON substring parse failed:", e2, jsonSubstring);
+          }
+        }
+      }
+
+      // 3. Fallback object if parsing fails entirely
+      if (!extractedJson || typeof extractedJson !== "object") {
+        extractedJson = {
+          trainingName: "",
+          certificateNumber: "",
+          submitterName: "",
+          institution: "",
+          completionHours: "",
+          completionDate: "",
+          confidence: "low",
+          summary: "문서 내용 감지됨 (텍스트 인식 결과에서 유효한 연수 정보를 직접 입력해 주세요).",
+        };
+      }
+
       return res.json({
         success: true,
         data: extractedJson,
