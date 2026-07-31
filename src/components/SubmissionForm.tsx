@@ -68,7 +68,17 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
         body: JSON.stringify({ base64Data, mimeType, fileName })
       });
 
-      const json = await response.json();
+      const responseText = await response.text();
+      let json: any = {};
+      try {
+        json = JSON.parse(responseText);
+      } catch {
+        throw new Error(
+          !response.ok
+            ? `서버 응답 오류 (상태: ${response.status}). 파일 용량이 너무 크거나 백엔드 연결 상태를 확인해주세요.`
+            : '서버에서 올바른 JSON 데이터를 반환하지 않았습니다.'
+        );
+      }
 
       if (!response.ok || !json.success) {
         throw new Error(json.error || 'Gemini 분석 중 오류가 발생했습니다.');
@@ -88,7 +98,7 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
       showToast(
         'success',
         'AI 이수증 자동 추출 완료!',
-        `연수명과 이수증 번호가 감지되어 폼에 입력되었습니다. (신뢰도: ${resData.confidence.toUpperCase()})`
+        `연수명과 이수증 번호가 감지되어 폼에 입력되었습니다. (신뢰도: ${(resData.confidence || 'medium').toUpperCase()})`
       );
     } catch (err: any) {
       console.error('AI Extraction Error:', err);

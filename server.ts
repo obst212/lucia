@@ -11,8 +11,8 @@ async function startServer() {
   const PORT = 3000;
 
   // JSON payload parser limit for image & PDF base64 uploads
-  app.use(express.json({ limit: "30mb" }));
-  app.use(express.urlencoded({ limit: "30mb", extended: true }));
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
   // Health check endpoint
   app.get("/api/health", (_req, res) => {
@@ -194,6 +194,21 @@ async function startServer() {
         error: err.message || "Google 시트로 제출 전송 중 네트워크 오류가 발생했습니다.",
       });
     }
+  });
+
+  // API 404 fallback: Ensure unhandled /api requests return JSON instead of Vite HTML
+  app.all("/api/*", (_req, res) => {
+    res.status(404).json({ error: "요청하신 API 경로를 찾을 수 없습니다." });
+  });
+
+  // Global Express Error Handler to prevent Express/Body-parser from returning HTML error pages
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("Global Express Error:", err);
+    const status = err.status || err.statusCode || 500;
+    const message = err.type === "entity.too.large"
+      ? "업로드한 파일 용량이 너무 큽니다. (최대 50MB 제한)"
+      : (err.message || "서버 처리 중 오류가 발생했습니다.");
+    res.status(status).json({ error: message });
   });
 
   // Vite middleware setup for development vs static serve for production
