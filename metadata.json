@@ -1,0 +1,6 @@
+{
+  "name": "교직원 연수 이수증 취합 시스템",
+  "description": "교직원(교원, 지방공무원, 교육공무직)의 연수 이수증 제출 및 Google 시트 자동 연동, Gemini AI 이수증 자동 추출 시스템",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
