@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { GoogleGenAI, Type } from '@google/genai';
 import { FacultyType, CertificateForm, ExtractionResult, SubmissionRecord } from '../types';
 import { FacultyTypeSelector } from './FacultyTypeSelector';
 import { FileUploader } from './FileUploader';
@@ -54,13 +55,17 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
     }
   };
 
-  // Trigger Gemini AI Extraction via Backend Route (/api/gemini/extract)
+  // Trigger Gemini AI Extraction via Backend Route (/api/gemini/extract) with Client Fallback
   const handleExtractAi = async (base64Data: string, mimeType: string, fileName: string) => {
     if (!base64Data) return;
 
     setIsExtracting(true);
     showToast('info', 'AI 이수증 분석 시작', 'Gemini AI가 이수증 파일에서 연수명과 번호를 판독 중입니다...');
 
+    let resData: ExtractionResult | null = null;
+    let extractionError: string | null = null;
+
+    // 1. Try Backend / Vercel Serverless Route (/api/gemini/extract)
     try {
       const response = await fetch('/api/gemini/extract', {
         method: 'POST',
@@ -70,29 +75,72 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
 
       const responseText = await response.text();
       let json: any = {};
-      try {
-        json = JSON.parse(responseText);
-      } catch {
-        throw new Error(
-          !response.ok
-            ? `서버 응답 오류 (상태: ${response.status}). 파일 용량이 너무 크거나 백엔드 연결 상태를 확인해주세요.`
-            : '서버에서 올바른 JSON 데이터를 반환하지 않았습니다.'
-        );
-      }
+      try { json = JSON.parse(responseText); } catch { json = {}; }
 
-      if (!response.ok || !json.success) {
-        throw new Error(json.error || 'Gemini 분석 중 오류가 발생했습니다.');
+      if (response.ok && json.success && json.data) {
+        resData = json.data;
+      } else if (json.error) {
+        extractionError = json.error;
       }
+    } catch (err: any) {
+      console.warn('Backend API extraction failed, attempting client fallback if key exists:', err);
+    }
 
-      const resData: ExtractionResult = json.data;
+    // 2. Client-side Gemini SDK Fallback if server route unavailable & VITE_GEMINI_API_KEY is available
+    if (!resData) {
+      const clientApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+      if (clientApiKey) {
+        try {
+          const ai = new GoogleGenAI({ apiKey: clientApiKey });
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.6-flash',
+            contents: {
+              parts: [
+                { inlineData: { mimeType, data: base64Data } },
+                {
+                  text: `대한민국 교직원 연수 이수증/수료증 문서(파일명: ${fileName || '문서'})를 분석하여 오직 JSON 데이터만 출력하세요.
+항목: trainingName(연수명), certificateNumber(이수증 번호), submitterName(성명), institution(연수기관), completionHours(이수시간), completionDate(이수일자), confidence('high'|'medium'|'low'), summary(요약).`
+                }
+              ]
+            },
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  trainingName: { type: Type.STRING },
+                  certificateNumber: { type: Type.STRING },
+                  submitterName: { type: Type.STRING },
+                  institution: { type: Type.STRING },
+                  completionHours: { type: Type.STRING },
+                  completionDate: { type: Type.STRING },
+                  confidence: { type: Type.STRING },
+                  summary: { type: Type.STRING }
+                },
+                required: ['trainingName', 'certificateNumber', 'confidence', 'summary']
+              }
+            }
+          });
+
+          const text = response.text || '';
+          let cleaned = text.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '');
+          const parsed = JSON.parse(cleaned);
+          if (parsed && typeof parsed === 'object') {
+            resData = parsed;
+          }
+        } catch (clientErr: any) {
+          console.error('Client Gemini extraction failed:', clientErr);
+        }
+      }
+    }
+
+    if (resData) {
       setExtractionResult(resData);
-
-      // Auto Fill Form Fields if extracted values are present
       setFormData(prev => ({
         ...prev,
-        trainingName: resData.trainingName || prev.trainingName,
-        certificateNumber: resData.certificateNumber || prev.certificateNumber,
-        submitterName: resData.submitterName && !prev.submitterName ? resData.submitterName : prev.submitterName
+        trainingName: resData!.trainingName || prev.trainingName,
+        certificateNumber: resData!.certificateNumber || prev.certificateNumber,
+        submitterName: resData!.submitterName && !prev.submitterName ? resData!.submitterName : prev.submitterName
       }));
 
       showToast(
@@ -100,16 +148,15 @@ export const SubmissionForm: React.FC<SubmissionFormProps> = ({
         'AI 이수증 자동 추출 완료!',
         `연수명과 이수증 번호가 감지되어 폼에 입력되었습니다. (신뢰도: ${(resData.confidence || 'medium').toUpperCase()})`
       );
-    } catch (err: any) {
-      console.error('AI Extraction Error:', err);
+    } else {
       showToast(
         'warning',
         'AI 자동 추출 제한',
-        err.message || '이수증 자동 추출에 실패했습니다. 입력란에 직접 입력해 주세요.'
+        extractionError || '이수증 자동 추출에 실패했습니다. (Vercel 환경 변수 GEMINI_API_KEY 확인 필요)'
       );
-    } finally {
-      setIsExtracting(false);
     }
+
+    setIsExtracting(false);
   };
 
   // Form Reset
